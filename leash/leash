@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+# leash - run Claude Code in a hardened container, with only the current
+# project directory and the internet.
+#
+#   leash [claude args...]   start Claude Code in the current directory
+#   leash audit              run leashcheck inside the same sandbox
+#   leash shell              open a shell inside the same sandbox
+#   leash build              (re)build the image, e.g. to update Claude Code
+#   leash reset              delete the sandbox home (Claude login and settings)
+set -euo pipefail
+
+IMAGE=${LEASH_IMAGE:-leash-claude:latest}
+VOLUME=${LEASH_VOLUME:-leash-home}
+SELF=$(readlink -f "$0")
+REPO=$(dirname "$(dirname "$SELF")")
+
+die() { echo "leash: $*" >&2; exit 1; }
+
+cmd=run
+case "${1:-}" in
+    audit|shell|build|reset) cmd=$1; shift ;;
+    help|-h|--help) sed -n '2,9p' "$SELF" | sed 's/^# \{0,1\}//'; exit 0 ;;
+esac
+
+[ "$(id -u)" != 0 ] || die "run leash as your normal user, not as root or with sudo."
+command -v docker >/dev/null || die "Docker is not installed."
+
+# Use Docker directly if we can, otherwise through sudo. We do not suggest the
+# docker group: membership in it is equivalent to root on this machine.
+DOCKER=(docker)
+if ! docker info >/dev/null 2>&1; then
+    command -v sudo >/dev/null || die "cannot reach the Docker daemon."
+    echo "leash: Docker needs root here, using sudo." >&2
+    DOCKER=(sudo --preserve-env=ANTHROPIC_API_KEY docker)
+fi
+
+build() { "${DOCKER[@]}" build -t "$IMAGE" -f "$REPO/leash/Dockerfile" "$@" "$REPO"; }
+
+case "$cmd" in
+    build) build --pull --no-cache; exit ;;
+    reset) "${DOCKER[@]}" volume rm "$VOLUME"; exit ;;
+esac
+
+PROJECT=$(pwd -P)
+case "$HOME/" in
+    "$PROJECT"/*) die "refusing to mount $PROJECT: it contains your home directory. cd into a project first." ;;
+esac
+[ "$PROJECT" != / ] || die "refusing to mount /."
+
+"${DOCKER[@]}" image inspect "$IMAGE" >/dev/null 2>&1 || { echo "leash: building the image (first run only)..." >&2; build >&2; }
+
+args=(run --rm -i
+    --hostname leash
+    # start with no capabilities; these few are used by the entrypoint to set
+    # the firewall and switch user, then dropped before the agent starts
+    --cap-drop ALL --cap-add NET_ADMIN --cap-add SETUID --cap-add SETGID --cap-add SETPCAP --cap-add CHOWN
+    --security-opt no-new-privileges
+    --pids-limit 2048
+    --tmpfs /tmp:exec,mode=1777 --tmpfs /run
+    -v "$VOLUME":/home/agent
+    -v "$PROJECT":"$PROJECT" -w "$PROJECT"
+    -e LEASH_UID="$(id -u)" -e LEASH_GID="$(id -g)"
+    -e TERM="${TERM:-xterm-256color}" -e COLORTERM="${COLORTERM:-}"
+)
+[ -t 0 ] && [ -t 1 ] && args+=(-t)
+[ -z "${ANTHROPIC_API_KEY:-}" ] || args+=(-e ANTHROPIC_API_KEY)
+
+# Files in .git that make git on the HOST run commands (hooks, config) are
+# mounted read-only, so the agent cannot plant something that runs later
+# outside the sandbox. Set LEASH_GIT_RW=1 to turn this off.
+if [ -z "${LEASH_GIT_RW:-}" ] && [ -d "$PROJECT/.git" ]; then
+    for item in hooks config; do
+        [ -e "$PROJECT/.git/$item" ] && args+=(-v "$PROJECT/.git/$item":"$PROJECT/.git/$item":ro)
+    done
+fi
+
+# commits made inside carry your name, without exposing your git config file
+name=$(git config user.name 2>/dev/null || true)
+mail=$(git config user.email 2>/dev/null || true)
+[ -z "$name" ] || args+=(-e GIT_AUTHOR_NAME="$name" -e GIT_COMMITTER_NAME="$name")
+[ -z "$mail" ] || args+=(-e GIT_AUTHOR_EMAIL="$mail" -e GIT_COMMITTER_EMAIL="$mail")
+
+case "$cmd" in
+    run)   inner=(claude "$@") ;;
+    audit) inner=(python3 /opt/leashcheck.py "$@") ;;
+    shell) inner=(bash "$@") ;;
+esac
+
+exec "${DOCKER[@]}" "${args[@]}" "$IMAGE" "${inner[@]}"

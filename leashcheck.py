@@ -32,7 +32,7 @@ import sys
 from dataclasses import asdict, dataclass
 from urllib.parse import urlsplit
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 WEIGHT = {"critical": 25, "high": 10, "medium": 4, "low": 1}
 SEV_ORDER = ["critical", "high", "medium", "low"]
 
@@ -159,6 +159,51 @@ def pretty(path, homes):
     return path
 
 
+def mount_entry(path, mountinfo=None):
+    """(fstype, root) of the mount holding path, read from /proc/self/mountinfo."""
+    try:
+        if mountinfo is None:
+            with open("/proc/self/mountinfo") as fh:
+                mountinfo = fh.read()
+    except OSError:
+        return None
+    real, best = os.path.realpath(path), None
+    for line in mountinfo.splitlines():
+        left, _, right = line.partition(" - ")
+        fields = left.split()
+        if len(fields) < 5 or not right:
+            continue
+        root, point = fields[3], fields[4]
+        if real == point or real.startswith(point.rstrip("/") + "/"):
+            if best is None or len(point) >= len(best[2]):
+                best = (right.split()[0], root, point)
+    return best[:2] if best else None
+
+
+def sandbox_private(path, mountinfo=None):
+    """True if path is on a container's own storage (image layer, tmpfs, named
+    volume) and not on a directory mounted in from the host. Heuristic."""
+    if not in_container():
+        return False
+    entry = mount_entry(path, mountinfo)
+    if not entry:
+        return False
+    fstype, root = entry
+    return fstype in ("overlay", "tmpfs", "aufs", "fuse-overlayfs") or "/volumes/" in root
+
+
+def default_gateway():
+    try:
+        with open("/proc/net/route") as fh:
+            for line in fh.read().splitlines()[1:]:
+                f = line.split()
+                if f[1] == "00000000" and int(f[3], 16) & 2:
+                    return socket.inet_ntoa(struct.pack("<I", int(f[2], 16)))
+    except (OSError, ValueError, IndexError):
+        pass
+    return None
+
+
 def proc_status():
     fields = {}
     try:
@@ -249,7 +294,10 @@ def probe_reads(ctx):
         others = [e for e in os.listdir(parent) if e != os.path.basename(ctx.project.rstrip(os.sep))]
     except OSError:
         others = None
-    if others:
+    if sandbox_private(parent):
+        out.append(Result("read.siblings", "Files it can read", "Directories outside the project", "medium", "na",
+                          "the project's parent is the container's own filesystem"))
+    elif others:
         out.append(Result("read.siblings", "Files it can read", "Directories outside the project", "medium", "exposed",
                           "%d other entries visible in %s" % (len(others), pretty(parent, ctx.homes)),
                           "Mount only the project directory (ideally a copy or git worktree) into the sandbox."))
@@ -270,18 +318,21 @@ STARTUP_FILES = [".bashrc", ".bash_profile", ".profile", ".zshrc", ".zprofile",
 def probe_writes(ctx):
     cat = "Files it can change or delete"
     out = []
+    # a home directory that exists only inside the container is not the user's home
+    homes = [h for h in ctx.homes if not sandbox_private(h)]
 
-    states = [can_create_in(h) for h in ctx.homes]
+    states = [can_create_in(h) for h in homes]
     if any(s is True for s in states):
         out.append(Result("write.home", cat, "Home directory", "high", "exposed",
                           "created and deleted a canary file in ~",
                           "Make everything outside the project read-only or invisible. A runaway `rm -rf` then stops at the project."))
     else:
         out.append(Result("write.home", cat, "Home directory", "high",
-                          "na" if all(s is None for s in states) else "protected", "not writable"))
+                          "na" if all(s is None for s in states) else "protected",
+                          "not writable" if homes else "home directory is private to the container"))
 
-    writable = [f for h in ctx.homes for f in STARTUP_FILES if can_open_for_write(os.path.join(h, f))]
-    present = [f for h in ctx.homes for f in STARTUP_FILES if os.path.exists(os.path.join(h, f))]
+    writable = [f for h in homes for f in STARTUP_FILES if can_open_for_write(os.path.join(h, f))]
+    present = [f for h in homes for f in STARTUP_FILES if os.path.exists(os.path.join(h, f))]
     if writable:
         out.append(Result("write.startup", cat, "Shell startup files and git config", "high", "exposed",
                           "writable: %s" % ", ".join("~/" + f for f in sorted(set(writable))[:4]),
@@ -290,7 +341,7 @@ def probe_writes(ctx):
         out.append(Result("write.startup", cat, "Shell startup files and git config", "high",
                           "protected" if present else "na", "not writable" if present else "not present"))
 
-    states = [can_create_in(os.path.join(h, ".ssh")) for h in ctx.homes]
+    states = [can_create_in(os.path.join(h, ".ssh")) for h in homes]
     if any(s is True for s in states):
         out.append(Result("write.ssh", cat, "~/.ssh (authorized_keys, config)", "high", "exposed",
                           "created and deleted a canary file in ~/.ssh",
@@ -300,7 +351,7 @@ def probe_writes(ctx):
                           "na" if all(s is None for s in states) else "protected", "not writable"))
 
     parent = os.path.dirname(ctx.project.rstrip(os.sep)) or os.sep
-    state = can_create_in(parent)
+    state = None if sandbox_private(parent) else can_create_in(parent)
     if state:
         out.append(Result("write.parent", cat, "Parent of the project directory", "medium", "exposed",
                           "created and deleted a canary file in %s" % pretty(parent, ctx.homes),
@@ -463,6 +514,19 @@ def probe_network(ctx):
     else:
         out.append(Result("net.local", cat, "Local services on this machine", "medium", "protected",
                           "no common database ports open on 127.0.0.1"))
+
+    if in_container():  # 127.0.0.1 is the container itself; the host sits behind the gateway
+        gateway = default_gateway()
+        ports = dict(LOCAL_PORTS, **{22: "ssh"})
+        found = ["%s (%d)" % (n, p) for p, n in ports.items() if gateway and tcp_open(gateway, p, 0.5)]
+        if found:
+            out.append(Result("net.host_gateway", cat, "Host services through the container gateway", "medium",
+                              "exposed", "reachable at %s: %s" % (gateway, ", ".join(found)),
+                              "Block private address ranges from inside the container, or use a network without a route to the host."))
+        else:
+            out.append(Result("net.host_gateway", cat, "Host services through the container gateway", "medium",
+                              "protected" if gateway else "na",
+                              "no common service ports reachable on the gateway" if gateway else "no default gateway"))
     return out
 
 

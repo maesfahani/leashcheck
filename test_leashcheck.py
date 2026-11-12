@@ -91,6 +91,38 @@ class FakeHome(unittest.TestCase):
         self.assertEqual([r.status for r in res], ["na"])
 
 
+MOUNTINFO = """\
+500 400 0:50 / / rw,relatime - overlay overlay rw,lowerdir=/x
+501 500 0:51 / /proc rw - proc proc rw
+502 500 0:52 / /tmp rw - tmpfs tmpfs rw
+503 500 8:3 /home/u/proj /proj rw,relatime - ext4 /dev/sda3 rw
+504 500 8:3 /var/lib/docker/volumes/box-home/_data /home/agent rw - ext4 /dev/sda3 rw
+"""
+
+
+class Mounts(unittest.TestCase):
+    def setUp(self):
+        self.orig = br.in_container
+        br.in_container = lambda: True
+
+    def tearDown(self):
+        br.in_container = self.orig
+
+    def test_longest_mount_point_wins(self):
+        self.assertEqual(br.mount_entry("/proj/src", MOUNTINFO), ("ext4", "/home/u/proj"))
+        self.assertEqual(br.mount_entry("/projx", MOUNTINFO)[0], "overlay")
+
+    def test_private_versus_host_backed(self):
+        self.assertTrue(br.sandbox_private("/etc", MOUNTINFO))          # image layer
+        self.assertTrue(br.sandbox_private("/tmp/x", MOUNTINFO))        # tmpfs
+        self.assertTrue(br.sandbox_private("/home/agent", MOUNTINFO))   # named volume
+        self.assertFalse(br.sandbox_private("/proj", MOUNTINFO))        # host bind mount
+
+    def test_never_private_outside_a_container(self):
+        br.in_container = lambda: False
+        self.assertFalse(br.sandbox_private("/etc", MOUNTINFO))
+
+
 class Scoring(unittest.TestCase):
     def r(self, sev, status="exposed"):
         return br.Result("x", "c", "t", sev, status)
