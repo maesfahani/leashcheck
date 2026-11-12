@@ -1,6 +1,6 @@
 # Which isolation is safest for an AI coding agent?
 
-Study run on 2026-11-12 with leashcheck 0.1.0 on one Ubuntu machine (kernel 7.0, x86-64).
+Study run on 2026-11-12 with leashcheck 0.2.0 on one Ubuntu machine (kernel 7.0, x86-64).
 Eight configurations were measured.
 
 ## Verdict

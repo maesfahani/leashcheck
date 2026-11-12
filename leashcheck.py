@@ -32,7 +32,7 @@ import sys
 from dataclasses import asdict, dataclass
 from urllib.parse import urlsplit
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 WEIGHT = {"critical": 25, "high": 10, "medium": 4, "low": 1}
 SEV_ORDER = ["critical", "high", "medium", "low"]
 
