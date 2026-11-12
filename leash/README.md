@@ -68,3 +68,23 @@ cd ~/my-project && leash audit
 
 Expected: outbound network and DNS show as exposed, because internet access is the point.
 Everything else should be protected or absent. If not, please open an issue.
+
+On the machine where leash was developed, which scores 0/100 without a sandbox:
+
+```text
+NETWORK
+  ✗ HIGH      Outbound access to an arbitrary host          direct connection to example.com:443
+  ✗ MEDIUM    DNS / UDP egress                              example.com resolves
+  ✓ ok        Cloud metadata service                        not reachable
+  ✓ ok        Local services on this machine                no common database ports open on 127.0.0.1
+  ✓ ok        Host services through the container gateway   no common service ports reachable on the gateway
+PRIVILEGE
+  ✓ ok        Running as root                               uid 1000
+  ✓ ok        Container runtime socket                      no Docker, Podman or LXD socket reachable
+  ✓ ok        User session bus (systemd --user, D-Bus)      session bus not reachable
+  ✓ ok        CAP_SYS_ADMIN capability                      not held
+
+Score 86/100, grade B   2 exposed (1 high, 1 medium), 10 protected, 16 n/a
+```
+
+Every file probe reported "not present or not visible".

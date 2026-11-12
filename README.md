@@ -84,7 +84,10 @@ an allowlist proxy.
 ## leash: run Claude Code safely
 
 `leash` is a one-word launcher that starts Claude Code inside a hardened container like the one
-above, with the internet left on. Linux with Docker. It is experimental and has had little testing.
+above, with the internet left on. Linux with Docker. Experimental.
+
+`leash audit` on the study machine scores **86 / B**: the only two exposures are outbound network
+and DNS, which is the internet access the agent needs. Without leash the same machine scores 0.
 
 ```sh
 git clone https://github.com/maesfahani/leashcheck
