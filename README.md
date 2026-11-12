@@ -74,6 +74,20 @@ docker run --rm -v "$PWD":/w -w /w \
 Remove `--network none` if the agent needs the internet (score 82), or better, route it through
 an allowlist proxy.
 
+## leash: run Claude Code inside that setup (experimental)
+
+This repository also contains `leash`, a one-word launcher that starts Claude Code in a hardened
+container with the current project directory and the internet, and nothing else from your machine.
+
+```sh
+cd ~/my-project
+leash          # Claude Code, sandboxed
+leash audit    # leashcheck inside the same sandbox
+```
+
+It is new and has had little testing. Install steps, what the agent can and cannot reach,
+and the risk that remains: [leash/README.md](leash/README.md).
+
 ## Use
 
 Run it **the way the agent would run it**. Running it in your own terminal measures you, not the agent.
@@ -99,7 +113,7 @@ integrate with the agent. It measures the environment. Python 3.8+, Linux; macOS
 | Files it can read | SSH keys, cloud credentials, kubeconfig, git/GitHub tokens, registry tokens, GPG keys, browser profiles, shell history, project `.env`, directories outside the project |
 | Files it can change | home directory, shell startup files, `~/.ssh`, the project's parent, system directories |
 | Secrets within reach | secret-looking environment variables, SSH agent socket, environment of other processes |
-| Network | outbound access to an arbitrary host (direct or through a proxy), DNS and UDP egress, cloud metadata service, local database ports |
+| Network | outbound access to an arbitrary host (direct or through a proxy), DNS and UDP egress, cloud metadata service, local database ports, host services through the container gateway |
 | Privilege | root, passwordless sudo, Docker/Podman/LXD socket, user session bus, `CAP_SYS_ADMIN` |
 
 ## Is it safe to run?
@@ -126,9 +140,11 @@ Any critical exposure caps the grade at D.
   yet a VM survives a kernel exploit that a container does not.
 - **A good score is not proof of safety.** The tool only finds the channels it knows about.
   Three probes were added during the study after a sandbox wrongly scored 100.
-- **Containers are slightly under-scored.** The tool cannot yet tell a container's own disposable
-  files from host files, so "directories outside the project" is flagged inside containers.
-  "Running as root" counts as medium and "system directories writable" as low there.
+- **Inside a container, only host files count.** Since 0.3.0 the tool reads the mount table to tell
+  the container's own disposable files from directories mounted in from the host, and reports the
+  former as not applicable. This is a heuristic. "Running as root" counts as medium and
+  "system directories writable" as low there. The study above was run with 0.2.0, which flagged
+  some container-internal paths, so its Docker scores are slightly too low.
 
 ## Contributing
 
