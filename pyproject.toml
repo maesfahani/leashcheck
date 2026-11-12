@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-blastradius"
+dynamic = ["version"]
+description = "See what an AI coding agent can reach on your machine: secrets, files, network, privilege."
+readme = "README.md"
+requires-python = ">=3.8"
+license = "MIT"
+license-files = ["LICENSE"]
+keywords = ["ai-agents", "security", "sandbox", "audit", "llm"]
+classifiers = [
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3",
+    "Topic :: Security",
+]
+
+[project.urls]
+Homepage = "https://github.com/maesfahani/blastradius"
+Issues = "https://github.com/maesfahani/blastradius/issues"
+
+[project.scripts]
+blastradius = "blastradius:main"
+agent-blastradius = "blastradius:main"
+
+[tool.setuptools]
+py-modules = ["blastradius"]
+
+[tool.setuptools.dynamic]
+version = { attr = "blastradius.VERSION" }
