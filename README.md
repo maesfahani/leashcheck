@@ -4,10 +4,16 @@
 
 AI coding agents run shell commands. Whatever the agent's process can read, change or send,
 a wrong command, a bad dependency or a prompt injection can read, change or send too.
-`leashcheck` runs harmless probes from inside the agent's environment and gives you a scorecard.
+This repository has two tools:
+
+| Tool | What it does |
+|---|---|
+| **`leashcheck`** | Measures the problem. Runs harmless probes from inside the agent's environment and gives you a scorecard. |
+| **[`leash`](#leash-run-claude-code-safely)** | Fixes it. Starts Claude Code in a hardened container with your project and the internet, and nothing else from your machine. Experimental. |
 
 ```sh
-pipx run leashcheck        # or: uvx leashcheck
+pipx run leashcheck        # measure: what can the agent reach right now?
+cd ~/my-project && leash   # fix: run Claude Code on a leash
 ```
 
 ```text
@@ -74,19 +80,32 @@ docker run --rm -v "$PWD":/w -w /w \
 Remove `--network none` if the agent needs the internet (score 82), or better, route it through
 an allowlist proxy.
 
-## leash: run Claude Code inside that setup (experimental)
+## leash: run Claude Code safely
 
-This repository also contains `leash`, a one-word launcher that starts Claude Code in a hardened
-container with the current project directory and the internet, and nothing else from your machine.
+`leash` is a one-word launcher that starts Claude Code inside a hardened container like the one
+above, with the internet left on. Linux with Docker. It is experimental and has had little testing.
 
 ```sh
+git clone https://github.com/maesfahani/leashcheck
+ln -s "$PWD/leashcheck/leash/leash" ~/.local/bin/leash
+
 cd ~/my-project
-leash          # Claude Code, sandboxed
-leash audit    # leashcheck inside the same sandbox
+leash          # Claude Code, sandboxed; extra arguments go to claude
+leash audit    # run leashcheck inside the same sandbox
+leash shell    # a shell inside the same sandbox
 ```
 
-It is new and has had little testing. Install steps, what the agent can and cannot reach,
-and the risk that remains: [leash/README.md](leash/README.md).
+| The agent gets | The agent does not get |
+|---|---|
+| The current directory, read-write | Your home directory: SSH keys, git credentials, browser profiles, history |
+| The internet | Your SSH agent, the Docker socket, the session bus |
+| A private home directory that keeps its Claude login | Root or any Linux capability |
+| Your git name and email for commits | The host and local network (firewalled), other processes |
+| | Write access to `.git/hooks` and `.git/config` |
+
+Risk that remains: the agent can change or delete the project, can send anything it reads out to
+the internet, and a container is weaker than a virtual machine against kernel exploits.
+Details: [leash/README.md](leash/README.md).
 
 ## Use
 
