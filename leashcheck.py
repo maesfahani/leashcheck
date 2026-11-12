@@ -121,6 +121,37 @@ def unix_connect(path, timeout=1.0):
         return None
 
 
+def ssh_agent_keys(path):
+    """Number of keys an SSH agent socket offers, or None if unreachable."""
+    s = unix_connect(path)
+    if not s:
+        return None
+    try:
+        s.sendall(struct.pack(">IB", 1, 11))  # SSH_AGENTC_REQUEST_IDENTITIES
+        reply = s.recv(9)
+        if len(reply) >= 9 and reply[4] == 12:
+            return struct.unpack(">I", reply[5:9])[0]
+    except OSError:
+        pass
+    finally:
+        s.close()
+    return None
+
+
+def udp_dns_works(timeout):
+    """Send one ordinary DNS query for example.com straight to a public resolver."""
+    query = b"\x12\x34\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x07example\x03com\x00\x00\x01\x00\x01"
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.settimeout(timeout)
+        s.sendto(query, ("1.1.1.1", 53))
+        return s.recvfrom(512)[0][:2] == query[:2]
+    except OSError:
+        return False
+    finally:
+        s.close()
+
+
 def pretty(path, homes):
     for home in homes:
         if path == home or path.startswith(home + os.sep):
@@ -280,8 +311,9 @@ def probe_writes(ctx):
 
     sysdirs = [d for d in ("/etc", "/usr/bin", "/usr/local/bin") if can_create_in(d)]
     if sysdirs:
-        out.append(Result("write.system", cat, "System directories", "critical", "exposed",
-                          "writable: %s" % ", ".join(sysdirs),
+        boxed = in_container()  # a container's own /etc is disposable
+        out.append(Result("write.system", cat, "System directories", "low" if boxed else "critical", "exposed",
+                          "writable: %s%s" % (", ".join(sysdirs), " (container filesystem)" if boxed else ""),
                           "The agent can alter the operating system. Run it as an unprivileged user, in a container or VM that is disposable."))
     else:
         out.append(Result("write.system", cat, "System directories", "critical", "protected", "not writable"))
@@ -307,33 +339,33 @@ def probe_env(ctx):
     else:
         out.append(Result("env.secrets", cat, "Secret-looking environment variables", "high", "protected", "none found"))
 
-    sock_path = os.environ.get("SSH_AUTH_SOCK")
-    if not sock_path:
-        out.append(Result("env.ssh_agent", cat, "SSH agent", "high", "na", "SSH_AUTH_SOCK not set"))
-    else:
-        count = None
-        s = unix_connect(sock_path)
-        if s:
-            try:
-                s.sendall(struct.pack(">IB", 1, 11))  # SSH_AGENTC_REQUEST_IDENTITIES
-                reply = s.recv(9)
-                if len(reply) >= 9 and reply[4] == 12:
-                    count = struct.unpack(">I", reply[5:9])[0]
-            except OSError:
-                pass
-            finally:
-                s.close()
+    env_sock = os.environ.get("SSH_AUTH_SOCK")
+    run = "/run/user/%d" % (os.getuid() if hasattr(os, "getuid") else 0)
+    candidates = ([env_sock] if env_sock else []) + [run + p for p in (
+        "/keyring/ssh", "/gcr/ssh", "/openssh_agent", "/ssh-agent.socket")] + glob.glob("/tmp/ssh-*/agent.*")
+    found = None
+    for path in dict.fromkeys(candidates):
+        count = ssh_agent_keys(path)
         if count:
-            out.append(Result("env.ssh_agent", cat, "SSH agent", "high", "exposed",
-                              "%d key(s) usable through the agent socket, without reading any key file" % count,
-                              "Unset SSH_AUTH_SOCK for the agent, and do not forward the agent socket into its sandbox."))
-        else:
-            out.append(Result("env.ssh_agent", cat, "SSH agent", "high", "protected",
-                              "socket unreachable or no keys loaded"))
+            found = (path, count)
+            break
+    if found:
+        via = "SSH_AUTH_SOCK" if found[0] == env_sock else "a well-known socket path, although SSH_AUTH_SOCK is not set"
+        out.append(Result("env.ssh_agent", cat, "SSH agent", "high", "exposed",
+                          "%d key(s) usable via %s, without reading any key file" % (found[1], via),
+                          "Unsetting SSH_AUTH_SOCK is not enough: the socket itself must be unreachable. "
+                          "Give the agent its own /run and /tmp (a mount namespace or container)."))
+    else:
+        out.append(Result("env.ssh_agent", cat, "SSH agent", "high", "protected" if env_sock else "na",
+                          "no agent socket reachable or no keys loaded"))
 
     if os.path.isdir("/proc"):
         me, readable = os.getpid(), 0
-        for entry in os.listdir("/proc"):
+        try:
+            entries = os.listdir("/proc")
+        except OSError:
+            entries = []
+        for entry in entries:
             if entry.isdigit() and int(entry) != me:
                 try:
                     os.close(os.open("/proc/%s/environ" % entry, os.O_RDONLY))
@@ -403,6 +435,19 @@ def probe_network(ctx):
         out.append(Result("net.outbound", cat, "Outbound access to an arbitrary host", "high", "protected",
                           "example.com unreachable directly and through any proxy"))
 
+    try:
+        socket.getaddrinfo("example.com", 443)
+        leak = "example.com resolves; data can leave inside DNS queries even when connections are blocked"
+    except OSError:
+        leak = ("the system resolver fails, but a UDP query sent straight to 1.1.1.1:53 is answered"
+                if udp_dns_works(min(ctx.timeout, 2.0)) else None)
+    if leak:
+        out.append(Result("net.dns", cat, "DNS / UDP egress", "medium", "exposed", leak,
+                          "Resolve names only through a filtering proxy or resolver, or give the sandbox no resolver at all."))
+    else:
+        out.append(Result("net.dns", cat, "DNS / UDP egress", "medium", "protected",
+                          "example.com does not resolve and direct UDP to a public resolver gets no answer"))
+
     if tcp_open("169.254.169.254", 80, min(ctx.timeout, 1.0)):
         out.append(Result("net.metadata", cat, "Cloud metadata service", "critical", "exposed",
                           "169.254.169.254:80 accepts connections",
@@ -431,7 +476,8 @@ def probe_privilege(ctx):
     uid = os.getuid() if hasattr(os, "getuid") else -1
 
     if uid == 0:
-        out.append(Result("priv.root", cat, "Running as root", "high", "exposed",
+        # root inside a container is confined by namespaces; still an escape amplifier
+        out.append(Result("priv.root", cat, "Running as root", "medium" if in_container() else "high", "exposed",
                           "uid 0" + (" (inside a container)" if in_container() else ""),
                           "Run the agent as an unprivileged user, also inside containers (`USER` in the Dockerfile, or `--user`)."))
     else:
@@ -453,7 +499,8 @@ def probe_privilege(ctx):
         else:
             out.append(Result("priv.sudo", cat, "Passwordless sudo", "critical", "protected", "sudo needs a password"))
 
-    candidates = ["/var/run/docker.sock", "/run/docker.sock"]
+    candidates = ["/var/run/docker.sock", "/run/docker.sock", "/var/snap/lxd/common/lxd/unix.socket",
+                  "/var/lib/lxd/unix.socket", "/var/lib/incus/unix.socket"]
     candidates += [os.path.join(h, ".docker/run/docker.sock") for h in ctx.homes]
     if os.environ.get("XDG_RUNTIME_DIR"):
         candidates += [os.path.join(os.environ["XDG_RUNTIME_DIR"], p) for p in ("docker.sock", "podman/podman.sock")]
@@ -468,11 +515,31 @@ def probe_privilege(ctx):
     if open_socks:
         out.append(Result("priv.docker", cat, "Container runtime socket", "critical", "exposed",
                           "can connect to %s" % ", ".join(open_socks),
-                          "Access to the Docker socket equals root on the host (it can mount / into a new container). "
-                          "Never mount the socket into an agent sandbox; remove the agent's user from the docker group."))
+                          "Access to a container runtime socket equals root on the host (it can mount / into a new container). "
+                          "Never mount the socket into an agent sandbox; remove the agent's user from the docker/lxd group."))
     else:
         out.append(Result("priv.docker", cat, "Container runtime socket", "critical", "protected",
-                          "no Docker or Podman socket reachable"))
+                          "no Docker, Podman or LXD socket reachable"))
+
+    buses = ["/run/user/%d/bus" % uid]
+    match = re.search(r"unix:path=([^,;]+)", os.environ.get("DBUS_SESSION_BUS_ADDRESS", ""))
+    if match:
+        buses.insert(0, match.group(1))
+    reachable = None
+    for path in dict.fromkeys(buses):
+        s = unix_connect(path)
+        if s:
+            s.close()
+            reachable = path
+            break
+    if reachable:
+        out.append(Result("priv.session_bus", cat, "User session bus (systemd --user, D-Bus)", "high", "exposed",
+                          "can connect to %s; `systemd-run --user` can start processes outside a sandbox" % reachable,
+                          "A filesystem-only sandbox does not block this socket. Give the agent its own /run "
+                          "(mount namespace or container) so the session bus is not reachable."))
+    else:
+        out.append(Result("priv.session_bus", cat, "User session bus (systemd --user, D-Bus)", "high", "protected",
+                          "session bus not reachable"))
 
     cap_eff = proc_status().get("CapEff")
     if cap_eff is None:
