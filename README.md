@@ -4,6 +4,7 @@
 
 AI coding agents run shell commands. Whatever the agent's process can read, change or send,
 a wrong command, a bad dependency or a prompt injection can read, change or send too.
+
 This repository has two tools:
 
 | Tool | What it does |
