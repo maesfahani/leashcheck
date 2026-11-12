@@ -3,7 +3,7 @@ requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "agent-blastradius"
+name = "leashcheck"
 dynamic = ["version"]
 description = "See what an AI coding agent can reach on your machine: secrets, files, network, privilege."
 readme = "README.md"
@@ -21,15 +21,14 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/maesfahani/blastradius"
-Issues = "https://github.com/maesfahani/blastradius/issues"
+Homepage = "https://github.com/maesfahani/leashcheck"
+Issues = "https://github.com/maesfahani/leashcheck/issues"
 
 [project.scripts]
-blastradius = "blastradius:main"
-agent-blastradius = "blastradius:main"
+leashcheck = "leashcheck:main"
 
 [tool.setuptools]
-py-modules = ["blastradius"]
+py-modules = ["leashcheck"]
 
 [tool.setuptools.dynamic]
-version = { attr = "blastradius.VERSION" }
+version = { attr = "leashcheck.VERSION" }

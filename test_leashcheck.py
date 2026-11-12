@@ -5,7 +5,7 @@ import unittest
 from contextlib import redirect_stdout
 from io import StringIO
 
-import blastradius as br
+import leashcheck as br
 
 
 def by_id(results):

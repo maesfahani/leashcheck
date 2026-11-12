@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""blastradius - how much damage could an AI agent do from where it is running?
+"""leashcheck - how much damage could an AI agent do from where it is running?
 
 Run this *inside* the environment your coding agent runs in (ask the agent to
 run it, or run it in the same sandbox/container). It performs harmless probes
@@ -86,7 +86,7 @@ def can_create_in(directory):
     """Create and immediately delete an empty canary file. None if no such dir."""
     if not os.path.isdir(directory):
         return None
-    name = os.path.join(directory, ".blastradius-canary-%s" % secrets.token_hex(6))
+    name = os.path.join(directory, ".leashcheck-canary-%s" % secrets.token_hex(6))
     try:
         fd = os.open(name, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
     except OSError:
@@ -545,7 +545,7 @@ def render(results, env, color):
     utf = (sys.stdout.encoding or "").lower().startswith("utf")
     bad, good, skip = ("✗", "✓", "–") if utf else ("x", "ok", "-")
     sev_color = {"critical": "1;31", "high": "31", "medium": "33", "low": "36"}
-    lines = [paint("1", "blastradius %s" % VERSION) + "  what could an AI agent do from here?", ""]
+    lines = [paint("1", "leashcheck %s" % VERSION) + "  what could an AI agent do from here?", ""]
     lines.append("user %s (uid %s) | %s | container: %s | seccomp: %s | no_new_privs: %s" % (
         env["user"], env["uid"], env["os"], "yes" if env["container"] else "no", env["seccomp"],
         "yes" if env["no_new_privs"] else "no"))
@@ -578,7 +578,7 @@ def render(results, env, color):
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(prog="blastradius", description=__doc__.split("\n\n")[0])
+    ap = argparse.ArgumentParser(prog="leashcheck", description=__doc__.split("\n\n")[0])
     ap.add_argument("--project", default=os.getcwd(), help="project directory the agent works in (default: cwd)")
     ap.add_argument("--home", help="home directory to inspect (default: detected)")
     ap.add_argument("--no-network", action="store_true", help="skip all network probes")

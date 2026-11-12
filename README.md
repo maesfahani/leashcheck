@@ -1,8 +1,8 @@
-# blastradius
+# leashcheck
 
 **How much damage could an AI coding agent do from where it is running?**
 
-`blastradius` runs a set of harmless probes from inside your agent's environment
+`leashcheck` runs a set of harmless probes from inside your agent's environment
 and prints a scorecard: which secrets it can read, which files it can change or
 delete, where it can send data, and whether it can become root.
 
@@ -14,7 +14,7 @@ because it does not integrate with the agent. It only measures the environment.
 One file, Python 3.8+, no dependencies.
 
 ```sh
-python3 blastradius.py
+python3 leashcheck.py
 ```
 
 Run it **the way the agent would run it**: ask the agent to execute the command,
@@ -44,7 +44,7 @@ Yes, and the whole tool is one readable file so you can check.
 
 - Secrets are never printed, stored, or sent. Output contains names, paths and counts only.
 - Read checks open a file and read one byte, which is discarded.
-- Write checks create an empty file named `.blastradius-canary-<random>` and delete it at once,
+- Write checks create an empty file named `.leashcheck-canary-<random>` and delete it at once,
   or open an existing file for append without writing.
 - Network checks open a TCP connection to `example.com`, `1.1.1.1`, `169.254.169.254`
   and a few localhost ports. Nothing about you is transmitted.
