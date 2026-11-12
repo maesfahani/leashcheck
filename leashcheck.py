@@ -517,7 +517,8 @@ def probe_network(ctx):
 
     if in_container():  # 127.0.0.1 is the container itself; the host sits behind the gateway
         gateway = default_gateway()
-        ports = dict(LOCAL_PORTS, **{22: "ssh"})
+        ports = dict(LOCAL_PORTS)
+        ports[22] = "ssh"
         found = ["%s (%d)" % (n, p) for p, n in ports.items() if gateway and tcp_open(gateway, p, 0.5)]
         if found:
             out.append(Result("net.host_gateway", cat, "Host services through the container gateway", "medium",
@@ -700,6 +701,11 @@ def render(results, env, color):
     lines += ["", paint("1", "Score %d/100, grade %s" % (points, grade)) + "   %d exposed%s, %d protected, %d n/a" % (
         len(exposed), " (%s)" % counts if counts else "",
         sum(1 for r in results if r.status == "protected"), sum(1 for r in results if r.status == "na"))]
+
+    failed = [r for r in results if r.category == "Errors"]
+    if failed:
+        lines.append(paint("1;31", "INCOMPLETE: %d probe group(s) failed, so the score above is too high. "
+                                   "Please report this." % len(failed)))
 
     if exposed:
         lines += ["", paint("1", "HOW TO FIX, most severe first")]

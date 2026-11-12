@@ -123,6 +123,49 @@ class Mounts(unittest.TestCase):
         self.assertFalse(br.sandbox_private("/etc", MOUNTINFO))
 
 
+class NetworkInContainer(unittest.TestCase):
+    """Runs the whole network probe with every connection attempt stubbed out."""
+
+    def setUp(self):
+        self.saved = {n: getattr(br, n) for n in ("in_container", "tcp_open", "proxy_connect",
+                                                  "udp_dns_works", "default_gateway")}
+        self.getaddrinfo = br.socket.getaddrinfo
+        br.in_container = lambda: True
+        br.proxy_connect = lambda *a: None
+        br.udp_dns_works = lambda *a: False
+        br.default_gateway = lambda: "172.17.0.1"
+
+        def no_dns(*a, **k):
+            raise OSError("blocked")
+        br.socket.getaddrinfo = no_dns
+
+    def tearDown(self):
+        for name, value in self.saved.items():
+            setattr(br, name, value)
+        br.socket.getaddrinfo = self.getaddrinfo
+
+    def run_probe(self, reachable):
+        br.tcp_open = lambda host, port, timeout: (host, port) in reachable
+        return by_id(br.probe_network(br.Ctx(homes=["/nonexistent"], project="/nonexistent")))
+
+    def test_everything_blocked(self):
+        res = self.run_probe(set())
+        self.assertEqual(res["net.outbound"].status, "protected")
+        self.assertEqual(res["net.host_gateway"].status, "protected")
+
+    def test_host_service_behind_gateway_is_reported(self):
+        r = self.run_probe({("172.17.0.1", 5432), ("172.17.0.1", 22)})["net.host_gateway"]
+        self.assertEqual(r.status, "exposed")
+        self.assertIn("postgres (5432)", r.detail)
+        self.assertIn("ssh (22)", r.detail)
+
+    def test_failed_probe_is_flagged_as_incomplete(self):
+        results = [br.Result("probe_network", "Errors", "probe_network", "low", "na", "probe failed")]
+        env = {"user": "u", "uid": 1, "os": "linux", "container": True, "seccomp": "off",
+               "no_new_privs": False, "project": "/p"}
+        self.assertIn("INCOMPLETE", br.render(results, env, color=False))
+
+
 class Scoring(unittest.TestCase):
     def r(self, sev, status="exposed"):
         return br.Result("x", "c", "t", sev, status)

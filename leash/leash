@@ -82,7 +82,9 @@ mail=$(git config user.email 2>/dev/null || true)
 
 case "$cmd" in
     run)   inner=(claude "$@") ;;
-    audit) inner=(python3 /opt/leashcheck.py "$@") ;;
+    audit) # use the checkout's leashcheck, so the audit is current without a rebuild
+           args+=(-v "$REPO/leashcheck.py":/opt/leashcheck.py:ro)
+           inner=(python3 /opt/leashcheck.py "$@") ;;
     shell) inner=(bash "$@") ;;
 esac
 
